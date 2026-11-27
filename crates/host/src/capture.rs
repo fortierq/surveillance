@@ -7,8 +7,10 @@ use tokio::{io::AsyncReadExt, process::Command, sync::watch};
 use crate::{Result, config::{Config, WIDTH, HEIGHT}, media::{AUDIO_RATE, Media}, store::{Kind, Store}};
 
 const AUDIO_WINDOW: usize = AUDIO_RATE as usize / 20;
-const VIDEO_WIDTH: usize = WIDTH * 4;
-const VIDEO_HEIGHT: usize = HEIGHT * 4;
+const VIDEO_SCALE: usize = 2;
+const VIDEO_WIDTH: usize = WIDTH * VIDEO_SCALE;
+const VIDEO_HEIGHT: usize = HEIGHT * VIDEO_SCALE;
+const JPEG_QUALITY: u8 = 45;
 const RGB_FRAME_BYTES: usize = VIDEO_WIDTH * VIDEO_HEIGHT * 3;
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
@@ -163,7 +165,7 @@ async fn watch_input(input: &Input, store: &Store, health: &Health, media: &Medi
         match input.sensor {
             Sensor::Camera => {
                 let mut photo = Vec::new();
-                jpeg_encoder::Encoder::new(&mut photo, 75).encode(
+                jpeg_encoder::Encoder::new(&mut photo, JPEG_QUALITY).encode(
                     &buffer, VIDEO_WIDTH as u16, VIDEO_HEIGHT as u16, jpeg_encoder::ColorType::Rgb,
                 )?;
                 media.set_photo(photo);
@@ -186,7 +188,9 @@ impl Detector {
                 let mut luma = [0; WIDTH * HEIGHT];
                 for (y, row) in luma.chunks_exact_mut(WIDTH).enumerate() {
                     for (x, value) in row.iter_mut().enumerate() {
-                        let index = ((y * 4 + 2) * VIDEO_WIDTH + x * 4 + 2) * 3;
+                        let source_y = y * VIDEO_SCALE + VIDEO_SCALE / 2;
+                        let source_x = x * VIDEO_SCALE + VIDEO_SCALE / 2;
+                        let index = (source_y * VIDEO_WIDTH + source_x) * 3;
                         let red = u16::from(input[index]);
                         let green = u16::from(input[index + 1]);
                         let blue = u16::from(input[index + 2]);

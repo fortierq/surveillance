@@ -27,7 +27,7 @@ The host shell and Nix package are available on macOS and Linux. Windows uses na
 4. Install `android/app/build/outputs/apk/debug/app-debug.apk`. Run `./result/bin/surveillance pair` on the host and enter the HTTPS address and the one-time code in Android. The host supports one paired phone. To replace it, disconnect from the app or run `./result/bin/surveillance revoke` on the host.
 5. Tap **Arm** in Android. macOS may ask for camera and microphone access. Allow access on the host and check that both sensors show **Ready**. Tap **Disarm** to release the inputs.
 
-While armed, tap **Live view** to see the camera. Open a detection event to see its photo or tap **Play audio** to hear the clip. The phone fetches media over private HTTPS.
+While armed, tap **Live view** to see the camera. Open a detection event to see its photo or tap **Play audio** to hear the clip. The camera preview and new event photos use compressed 320 × 240 JPEG images. The phone fetches media over private HTTPS.
 
 The host needs to be running and awake. For Android alerts while the phone is locked or away from Wi-Fi, [configure Firebase and run the device checks](docs/setup.md#configure-firebase-alerts). Pairing, status, and event history also work with the build that omits Firebase configuration.
 
