@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{DefaultBodyLimit, Path, Query, Request, State as ExtractState},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware::{self, Next},
@@ -11,12 +12,13 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 use uuid::Uuid;
 
-use crate::{Result, capture::{Health, SensorState}, store::{Event, History, Store}};
+use crate::{Result, capture::{Health, SensorState}, media::Media, store::{Event, History, MediaKind, Store}};
 
 #[derive(Clone)]
 pub struct State {
     pub store: Arc<Store>,
     pub health: Arc<Health>,
+    pub media: Arc<Media>,
     pub armed: Arc<watch::Sender<bool>>,
     pub push_configured: bool,
 }
@@ -28,6 +30,9 @@ pub fn router(state: State) -> Router {
         .route("/v1/armed", put(arm))
         .route("/v1/events", get(events))
         .route("/v1/events/{id}", get(event))
+        .route("/v1/events/{id}/photo", get(event_photo))
+        .route("/v1/events/{id}/audio", get(event_audio))
+        .route("/v1/live/frame", get(live_frame))
         .route("/v1/push-token", put(push_token))
         .layer(DefaultBodyLimit::max(4096))
         .layer(middleware::from_fn(|req: Request, next: Next| async move {
@@ -63,6 +68,7 @@ struct Status {
     microphone: SensorState,
     push_configured: bool,
     push_registered: bool,
+    live_video: bool,
 }
 
 async fn status(ExtractState(state): ExtractState<State>, headers: HeaderMap) -> ApiResult<Json<Status>> {
@@ -72,6 +78,7 @@ async fn status(ExtractState(state): ExtractState<State>, headers: HeaderMap) ->
     Ok(Json(Status {
         armed, camera, microphone,
         push_configured: state.push_configured,
+        live_video: true,
         push_registered: internal(state.store.has_push_token())?,
     }))
 }
@@ -106,6 +113,29 @@ async fn events(ExtractState(state): ExtractState<State>, headers: HeaderMap, Qu
 async fn event(ExtractState(state): ExtractState<State>, headers: HeaderMap, Path(id): Path<Uuid>) -> ApiResult<Json<Event>> {
     authenticate(&state, &headers)?;
     Ok(Json(internal(state.store.event(id))?.ok_or(StatusCode::NOT_FOUND)?))
+}
+
+type MediaResponse = ([(axum::http::HeaderName, &'static str); 1], Bytes);
+
+async fn live_frame(ExtractState(state): ExtractState<State>, headers: HeaderMap) -> ApiResult<MediaResponse> {
+    authenticate(&state, &headers)?;
+    if !internal(state.store.armed())? {
+        return Err(StatusCode::NOT_FOUND);
+    }
+    let photo = state.media.photo().ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(header::CONTENT_TYPE, "image/jpeg")], Bytes::from_owner(photo)))
+}
+
+async fn event_photo(ExtractState(state): ExtractState<State>, headers: HeaderMap, Path(id): Path<Uuid>) -> ApiResult<MediaResponse> {
+    authenticate(&state, &headers)?;
+    let photo = internal(state.store.event_media(id, MediaKind::Photo))?.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(header::CONTENT_TYPE, "image/jpeg")], Bytes::from(photo)))
+}
+
+async fn event_audio(ExtractState(state): ExtractState<State>, headers: HeaderMap, Path(id): Path<Uuid>) -> ApiResult<MediaResponse> {
+    authenticate(&state, &headers)?;
+    let audio = internal(state.store.event_media(id, MediaKind::Audio))?.ok_or(StatusCode::NOT_FOUND)?;
+    Ok(([(header::CONTENT_TYPE, "audio/wav")], Bytes::from(audio)))
 }
 
 #[derive(Deserialize)]
@@ -148,7 +178,52 @@ mod tests {
     use serde_json::{Value, json};
     use std::path::Path as FilePath;
     use tower::ServiceExt;
-    use crate::store::Kind;
+    use crate::{media::EventMedia, store::Kind};
+
+    #[tokio::test]
+    async fn media_is_private_and_live_video_requires_an_armed_host() {
+        let store = Arc::new(Store::open(FilePath::new(":memory:")).unwrap());
+        let media = Arc::new(Media::default());
+        let (armed, _) = watch::channel(false);
+        let router = router(State {
+            store: store.clone(),
+            health: Arc::new(Health::default()),
+            media: media.clone(),
+            armed: Arc::new(armed),
+            push_configured: false,
+        });
+        let credential = store.pair(&store.issue_code().unwrap()).unwrap().unwrap();
+        let photo = vec![255, 216, 255, 217];
+        media.set_photo(photo.clone());
+        media.add_audio(&[0; 1600]);
+        let live = "/v1/live/frame";
+        assert_eq!(raw_request(&router, Method::GET, live, None, None).await.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(raw_request(&router, Method::GET, live, Some(&credential), None).await.status(), StatusCode::NOT_FOUND);
+        store.set_armed(&credential, true).unwrap();
+        let frame = raw_request(&router, Method::GET, live, Some(&credential), None).await;
+        assert_eq!(frame.headers()[header::CONTENT_TYPE], "image/jpeg");
+        assert_eq!(to_bytes(frame.into_body(), 4096).await.unwrap(), photo);
+
+        let event = store.record(Kind::Sound, 18.0, true, media.snapshot()).unwrap().unwrap();
+        let detail = format!("/v1/events/{}", event.id);
+        let (_, metadata) = request(&router, Method::GET, &detail, Some(&credential), None).await;
+        assert_eq!(metadata["has_photo"], true);
+        assert_eq!(metadata["has_audio"], true);
+        let photo_path = format!("{detail}/photo");
+        assert_eq!(raw_request(&router, Method::GET, &photo_path, None, None).await.status(), StatusCode::UNAUTHORIZED);
+        let saved = raw_request(&router, Method::GET, &photo_path, Some(&credential), None).await;
+        assert_eq!(saved.headers()[header::CACHE_CONTROL], "no-store");
+        assert_eq!(to_bytes(saved.into_body(), 4096).await.unwrap(), photo);
+        let audio = raw_request(&router, Method::GET, &format!("{detail}/audio"), Some(&credential), None).await;
+        assert_eq!(audio.headers()[header::CONTENT_TYPE], "audio/wav");
+        assert_eq!(&to_bytes(audio.into_body(), 4096).await.unwrap()[..4], b"RIFF");
+
+        store.set_armed(&credential, false).unwrap();
+        assert_eq!(raw_request(&router, Method::GET, live, Some(&credential), None).await.status(), StatusCode::NOT_FOUND);
+        assert_eq!(raw_request(&router, Method::GET, &photo_path, Some(&credential), None).await.status(), StatusCode::OK);
+        store.revoke().unwrap();
+        assert_eq!(raw_request(&router, Method::GET, &photo_path, Some(&credential), None).await.status(), StatusCode::UNAUTHORIZED);
+    }
 
     #[tokio::test]
     async fn phone_lifecycle_and_event_history() {
@@ -157,6 +232,7 @@ mod tests {
         let router = router(State {
             store: store.clone(),
             health: Arc::new(Health::default()),
+            media: Arc::new(Media::default()),
             armed: Arc::new(armed),
             push_configured: true,
         });
@@ -172,15 +248,15 @@ mod tests {
         assert_eq!(status, StatusCode::UNAUTHORIZED);
         assert!(store.issue_code().is_err());
 
-        assert!(store.record(Kind::Motion, 0.2, true).unwrap().is_none());
+        assert!(store.record(Kind::Motion, 0.2, true, EventMedia::default()).unwrap().is_none());
         let (status, _) = request(&router, Method::PUT, "/v1/armed", credential, Some(&json!({"armed": true}))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(*watch.borrow());
 
         let (status, _) = request(&router, Method::PUT, "/v1/push-token", credential, Some(&json!({"token": "test-token"}))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
-        let motion = store.record(Kind::Motion, 0.2, true).unwrap().unwrap();
-        let sound = store.record(Kind::Sound, 18.0, true).unwrap().unwrap();
+        let motion = store.record(Kind::Motion, 0.2, true, EventMedia::default()).unwrap().unwrap();
+        let sound = store.record(Kind::Sound, 18.0, true, EventMedia::default()).unwrap().unwrap();
         assert!(store.pending().unwrap().is_some());
 
         let (status, newest) = request(&router, Method::GET, "/v1/events?limit=1", credential, None).await;
@@ -196,7 +272,7 @@ mod tests {
         let (status, _) = request(&router, Method::PUT, "/v1/armed", credential, Some(&json!({"armed": false}))).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
         assert!(!*watch.borrow());
-        assert!(store.record(Kind::Sound, 18.0, true).unwrap().is_none());
+        assert!(store.record(Kind::Sound, 18.0, true, EventMedia::default()).unwrap().is_none());
 
         let (status, _) = request(&router, Method::DELETE, "/v1/pair", credential, None).await;
         assert_eq!(status, StatusCode::NO_CONTENT);
@@ -207,15 +283,19 @@ mod tests {
     }
 
     async fn request(router: &Router, method: Method, uri: &str, credential: Option<&str>, body: Option<&Value>) -> (StatusCode, Value) {
+        let response = raw_request(router, method, uri, credential, body).await;
+        let status = response.status();
+        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
+        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
+        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+    }
+
+    async fn raw_request(router: &Router, method: Method, uri: &str, credential: Option<&str>, body: Option<&Value>) -> axum::response::Response {
         let mut request = Request::builder().method(method).uri(uri).header(header::CONTENT_TYPE, "application/json");
         if let Some(token) = credential {
             request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
         }
         let body = body.map_or_else(Body::empty, |body| Body::from(body.to_string()));
-        let response = router.clone().oneshot(request.body(body).unwrap()).await.unwrap();
-        let status = response.status();
-        assert_eq!(response.headers()[header::CACHE_CONTROL], "no-store");
-        let bytes = to_bytes(response.into_body(), 4096).await.unwrap();
-        (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
+        router.clone().oneshot(request.body(body).unwrap()).await.unwrap()
     }
 }

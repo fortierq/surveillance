@@ -7,7 +7,7 @@ use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use uuid::Uuid;
 
-use crate::Result;
+use crate::{Result, media::EventMedia};
 
 const ALERT_LIFETIME: i64 = 120;
 
@@ -27,12 +27,16 @@ impl Kind {
     }
 }
 
+pub enum MediaKind { Photo, Audio }
+
 #[derive(Serialize)]
 pub struct Event {
     pub id: String,
     pub kind: String,
     pub occurred_at_ms: i64,
     pub score: f32,
+    pub has_photo: bool,
+    pub has_audio: bool,
 }
 
 #[derive(Serialize)]
@@ -61,6 +65,10 @@ impl Store {
             CREATE TABLE IF NOT EXISTS phone (slot INTEGER PRIMARY KEY CHECK (slot = 1), hash BLOB NOT NULL, push_token TEXT);
             CREATE TABLE IF NOT EXISTS events (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, occurred_at_ms INTEGER NOT NULL, score REAL NOT NULL);
             CREATE INDEX IF NOT EXISTS events_age ON events (occurred_at_ms);
+            CREATE TABLE IF NOT EXISTS event_media (
+                event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
+                photo BLOB, audio BLOB
+            );
             CREATE TABLE IF NOT EXISTS outbox (
                 event_id TEXT PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
                 expires INTEGER NOT NULL, next_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0
@@ -141,7 +149,7 @@ impl Store {
         Ok(self.connection()?.query_row("SELECT EXISTS (SELECT 1 FROM phone WHERE push_token IS NOT NULL)", [], |row| row.get(0))?)
     }
 
-    pub fn record(&self, kind: Kind, score: f32, require_armed: bool) -> Result<Option<Event>> {
+    pub fn record(&self, kind: Kind, score: f32, require_armed: bool, media: EventMedia) -> Result<Option<Event>> {
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(Immediate)?;
         if require_armed && !tx.query_row("SELECT armed FROM state WHERE slot = 1", [], |row| row.get::<_, bool>(0))? {
@@ -152,9 +160,17 @@ impl Store {
             kind: kind.as_str().into(),
             occurred_at_ms: unix_time().as_millis() as i64,
             score,
+            has_photo: media.photo.is_some(),
+            has_audio: media.audio.is_some(),
         };
         tx.execute("INSERT INTO events (id, kind, occurred_at_ms, score) VALUES (?1, ?2, ?3, ?4)",
             params![event.id, event.kind, event.occurred_at_ms, event.score])?;
+        if event.has_photo || event.has_audio {
+            tx.execute("INSERT INTO event_media VALUES (?1, ?2, ?3)", params![event.id, media.photo.as_deref(), media.audio])?;
+            tx.execute("DELETE FROM event_media WHERE rowid IN (
+                SELECT rowid FROM event_media ORDER BY rowid DESC LIMIT -1 OFFSET 1000
+            )", [])?;
+        }
         let timestamp = event.occurred_at_ms / 1000;
         tx.execute("INSERT INTO outbox (event_id, expires, next_at)
                     SELECT ?1, ?2, ?3 FROM phone WHERE push_token IS NOT NULL",
@@ -164,14 +180,24 @@ impl Store {
     }
 
     pub fn event(&self, id: Uuid) -> Result<Option<Event>> {
-        Ok(self.connection()?.query_row("SELECT id, kind, occurred_at_ms, score FROM events WHERE id = ?1", [id.to_string()], event_at).optional()?)
+        Ok(self.connection()?.query_row("SELECT e.id, e.kind, e.occurred_at_ms, e.score, m.photo IS NOT NULL, m.audio IS NOT NULL
+            FROM events e LEFT JOIN event_media m ON m.event_id = e.id WHERE e.id = ?1", [id.to_string()], event_at).optional()?)
+    }
+
+    pub fn event_media(&self, id: Uuid, kind: MediaKind) -> Result<Option<Vec<u8>>> {
+        let query = match kind {
+            MediaKind::Photo => "SELECT photo FROM event_media WHERE event_id = ?1",
+            MediaKind::Audio => "SELECT audio FROM event_media WHERE event_id = ?1",
+        };
+        Ok(self.connection()?.query_row(query, [id.to_string()], |row| row.get::<_, Option<Vec<u8>>>(0)).optional()?.flatten())
     }
 
     pub fn history(&self, before: Option<i64>, limit: usize) -> Result<History> {
         let conn = self.connection()?;
-        let mut statement = conn.prepare("SELECT id, kind, occurred_at_ms, score, seq FROM events WHERE seq < ?1 ORDER BY seq DESC LIMIT ?2")?;
+        let mut statement = conn.prepare("SELECT e.id, e.kind, e.occurred_at_ms, e.score, m.photo IS NOT NULL, m.audio IS NOT NULL, e.seq
+            FROM events e LEFT JOIN event_media m ON m.event_id = e.id WHERE e.seq < ?1 ORDER BY e.seq DESC LIMIT ?2")?;
         let rows = statement.query_map(params![before.unwrap_or(i64::MAX), limit + 1], |row| {
-            Ok((event_at(row)?, row.get::<_, i64>(4)?))
+            Ok((event_at(row)?, row.get::<_, i64>(6)?))
         })?.collect::<rusqlite::Result<Vec<_>>>()?;
         let next_before = (rows.len() > limit).then(|| rows[limit - 1].1);
         let events = rows.into_iter().take(limit).map(|(event, _)| event).collect();
@@ -218,7 +244,7 @@ impl Store {
 }
 
 fn event_at(row: &Row<'_>) -> rusqlite::Result<Event> {
-    Ok(Event { id: row.get(0)?, kind: row.get(1)?, occurred_at_ms: row.get(2)?, score: row.get(3)? })
+    Ok(Event { id: row.get(0)?, kind: row.get(1)?, occurred_at_ms: row.get(2)?, score: row.get(3)?, has_photo: row.get(4)?, has_audio: row.get(5)? })
 }
 
 fn random_token() -> String {
@@ -249,7 +275,7 @@ mod tests {
         let store = Store::open(Path::new(":memory:")).unwrap();
         let credential = store.pair(&store.issue_code().unwrap()).unwrap().unwrap();
         assert!(store.set_push_token(&credential, "test-token").unwrap());
-        let event = store.record(Kind::Test, 0.0, false).unwrap().unwrap();
+        let event = store.record(Kind::Test, 0.0, false, EventMedia::default()).unwrap().unwrap();
         let pending = store.pending().unwrap().unwrap();
         assert_eq!(pending.event_id, event.id);
         store.retry(&pending, 10).unwrap();

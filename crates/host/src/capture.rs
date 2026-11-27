@@ -4,9 +4,12 @@ use serde::Serialize;
 use surveillance_detect::{Motion, Region, Sound};
 use tokio::{io::AsyncReadExt, process::Command, sync::watch};
 
-use crate::{Result, config::{Config, WIDTH, HEIGHT}, store::{Kind, Store}};
+use crate::{Result, config::{Config, WIDTH, HEIGHT}, media::{AUDIO_RATE, Media}, store::{Kind, Store}};
 
-const AUDIO_WINDOW: usize = 800;
+const AUDIO_WINDOW: usize = AUDIO_RATE as usize / 20;
+const VIDEO_WIDTH: usize = WIDTH * 4;
+const VIDEO_HEIGHT: usize = HEIGHT * 4;
+const RGB_FRAME_BYTES: usize = VIDEO_WIDTH * VIDEO_HEIGHT * 3;
 
 #[derive(Clone, Copy, Debug, Default, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -96,17 +99,17 @@ impl Input {
 fn output_args(cmd: &mut Command, sensor: Sensor) {
     match sensor {
         Sensor::Camera => {
-            let filters = format!("fps=5,scale={WIDTH}:{HEIGHT},format=gray");
+            let filters = format!("fps=5,scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2,format=rgb24");
             cmd.args(["-an", "-vf", &filters, "-threads", "1", "-c:v", "rawvideo", "-f", "rawvideo"]);
         }
         Sensor::Microphone => {
-            cmd.args(["-vn", "-ac", "1", "-ar", "16000", "-f", "s16le"]);
+            cmd.args(["-vn", "-ac", "1", "-ar", &AUDIO_RATE.to_string(), "-f", "s16le"]);
         }
     }
     cmd.arg("pipe:1");
 }
 
-pub async fn monitor(input: Input, store: Arc<Store>, health: Arc<Health>, mut armed: watch::Receiver<bool>) {
+pub async fn monitor(input: Input, store: Arc<Store>, health: Arc<Health>, media: Arc<Media>, mut armed: watch::Receiver<bool>) {
     let mut delay = Duration::from_secs(1);
     loop {
         if !*armed.borrow_and_update() {
@@ -118,18 +121,22 @@ pub async fn monitor(input: Input, store: Arc<Store>, health: Arc<Health>, mut a
             continue;
         }
         health.set(input.sensor, SensorState::Starting);
-        tokio::select! {
+        let result = tokio::select! {
             biased;
-            change = armed.changed() => {
-                if change.is_err() { return; }
-                continue;
-            }
-            result = watch_input(&input, &store, &health, &mut delay) => {
-                if let Err(error) = result {
-                    tracing::warn!(sensor = ?input.sensor, %error, "Capture interrupted. Retrying.");
-                    health.set(input.sensor, SensorState::Unavailable);
-                }
-            }
+            _ = armed.changed() => None,
+            result = watch_input(&input, &store, &health, &media, &mut delay) => Some(result),
+        };
+        match input.sensor {
+            Sensor::Camera => media.clear_photo(),
+            Sensor::Microphone => media.clear_audio(),
+        }
+        let Some(result) = result else {
+            if armed.has_changed().is_err() { return; }
+            continue;
+        };
+        if let Err(error) = result {
+            tracing::warn!(sensor = ?input.sensor, %error, "Capture interrupted. Retrying.");
+            health.set(input.sensor, SensorState::Unavailable);
         }
         tokio::select! {
             change = armed.changed() => if change.is_err() { return; },
@@ -138,7 +145,7 @@ pub async fn monitor(input: Input, store: Arc<Store>, health: Arc<Health>, mut a
     }
 }
 
-async fn watch_input(input: &Input, store: &Store, health: &Health, delay: &mut Duration) -> Result<()> {
+async fn watch_input(input: &Input, store: &Store, health: &Health, media: &Media, delay: &mut Duration) -> Result<()> {
     #[cfg(target_os = "macos")]
     if !macos_permission(input.sensor, health).await {
         return Ok(());
@@ -146,15 +153,25 @@ async fn watch_input(input: &Input, store: &Store, health: &Health, delay: &mut 
     let mut child = input.command().spawn()?;
     let mut samples = child.stdout.take().expect("FFmpeg stdout is piped");
     let (mut detector, mut buffer) = match input.detection {
-        Detection::Motion(region, threshold) => (Detector::Motion(Motion::new(region, threshold)), vec![0; WIDTH * HEIGHT]),
+        Detection::Motion(region, threshold) => (Detector::Motion(Motion::new(region, threshold)), vec![0; RGB_FRAME_BYTES]),
         Detection::Sound(margin) => (Detector::Sound(Sound::new(margin)), vec![0; AUDIO_WINDOW * 2]),
     };
     tokio::time::timeout(Duration::from_secs(10), samples.read_exact(&mut buffer)).await??;
     health.set(input.sensor, SensorState::Ready);
     *delay = Duration::from_secs(1);
     loop {
+        match input.sensor {
+            Sensor::Camera => {
+                let mut photo = Vec::new();
+                jpeg_encoder::Encoder::new(&mut photo, 75).encode(
+                    &buffer, VIDEO_WIDTH as u16, VIDEO_HEIGHT as u16, jpeg_encoder::ColorType::Rgb,
+                )?;
+                media.set_photo(photo);
+            }
+            Sensor::Microphone => media.add_audio(&buffer),
+        }
         if let Some((kind, score)) = detector.observe(&buffer) {
-            store.record(kind, score, true)?;
+            store.record(kind, score, true, media.snapshot())?;
         }
         tokio::time::timeout(Duration::from_secs(8), samples.read_exact(&mut buffer)).await??;
     }
@@ -165,7 +182,19 @@ enum Detector { Motion(Motion), Sound(Sound) }
 impl Detector {
     fn observe(&mut self, input: &[u8]) -> Option<(Kind, f32)> {
         match self {
-            Self::Motion(detector) => detector.observe(input).map(|score| (Kind::Motion, score)),
+            Self::Motion(detector) => {
+                let mut luma = [0; WIDTH * HEIGHT];
+                for (y, row) in luma.chunks_exact_mut(WIDTH).enumerate() {
+                    for (x, value) in row.iter_mut().enumerate() {
+                        let index = ((y * 4 + 2) * VIDEO_WIDTH + x * 4 + 2) * 3;
+                        let red = u16::from(input[index]);
+                        let green = u16::from(input[index + 1]);
+                        let blue = u16::from(input[index + 2]);
+                        *value = ((77 * red + 150 * green + 29 * blue) >> 8) as u8;
+                    }
+                }
+                detector.observe(&luma).map(|score| (Kind::Motion, score))
+            }
             Self::Sound(detector) => {
                 let mut window = [0; AUDIO_WINDOW];
                 for (out, pair) in window.iter_mut().zip(input.chunks_exact(2)) {
@@ -254,7 +283,7 @@ mod tests {
             "drawbox=x=88:y=28:w=32:h=48:color=white:t=fill:enable='eq(n,5)'",
         );
         let motion = Detector::Motion(Motion::new(Config::default().region().unwrap(), 0.04));
-        assert_eq!(fixture_count(video, Sensor::Camera, motion, WIDTH * HEIGHT).await, 1);
+        assert_eq!(fixture_count(video, Sensor::Camera, motion, RGB_FRAME_BYTES).await, 1);
 
         let audio = "aevalsrc='if(between(t,0.5,0.9),0.4,0.02)*sin(2*PI*440*t)':s=16000:d=2";
         let sound = Detector::Sound(Sound::new(14.0));

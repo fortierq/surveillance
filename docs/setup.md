@@ -23,11 +23,12 @@ The API binds to loopback. Use a private Tailscale Serve endpoint with access sc
 3. Pair the phone, then tap **Enable notifications** in the Android app if prompted. Allow the app's **Surveillance alerts** notification channel. The app registers its FCM token with the host.
 4. Run `surveillance test-alert`. Even while disarmed, this writes a test event and queues an alert if the phone has registered a push token. Lock the phone, switch it to cellular, and repeat. Tap the notification to open the test event.
 
-FCM requires Google Play services on the handset. Alerts carry a generic title and an event ID. The phone opens the event over the private HTTPS connection. Queued alerts expire after two minutes. History stays on the host and catches up when the app refreshes after reconnecting.
+FCM requires Google Play services on the handset. Alerts carry a generic title and an event ID. The phone loads the camera image and audio clip directly from the host when you open the event. The phone opens the event over the private HTTPS connection. Queued alerts expire after two minutes. History stays on the host and catches up when the app refreshes after reconnecting.
 
 ## Acceptance checks
 
 - On macOS, arm from Android and confirm both sensors reach **Ready**. Walk across the scene and clap. Check that two events appear and each notification opens the right event.
+- Tap **Live view** while armed and check that the image updates. Open a fresh event to check its photo and play the audio.
 - Switch on a light without moving through the scene and run a steady fan. Check for false positives and tune the two thresholds as needed.
 - Disable phone connectivity, trigger an event, wait more than two minutes, and reconnect. Check that the event appears in history without receiving a stale alert.
 - Unplug an external sensor while armed, check that the app reports the failure, then reconnect it. Disarm and check that the sensors return to **Idle**.

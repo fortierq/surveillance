@@ -1,6 +1,7 @@
 mod api;
 mod capture;
 mod config;
+mod media;
 mod push;
 mod store;
 
@@ -69,7 +70,7 @@ async fn main() -> Result<()> {
             println!("Phone and pairing code revoked.");
         }
         Command::TestAlert => {
-            let event = store.record(Kind::Test, 0.0, false)?;
+            let event = store.record(Kind::Test, 0.0, false, media::EventMedia::default())?;
             println!("{}", event.expect("test events are recorded while disarmed").id);
         }
         Command::Serve => serve(store, Config::load(&config_path)?, data).await?,
@@ -85,14 +86,15 @@ async fn serve(store: Arc<Store>, config: Config, data: PathBuf) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
     let active = watch::channel(store.armed()?);
     let health = Arc::new(capture::Health::default());
-    let state = api::State { store: store.clone(), health: health.clone(), armed: Arc::new(active.0), push_configured: push.is_some() };
+    let media = Arc::new(media::Media::default());
+    let state = api::State { store: store.clone(), health: health.clone(), media: media.clone(), armed: Arc::new(active.0), push_configured: push.is_some() };
 
     let mut workers = tokio::task::JoinSet::new();
     if let Some(input) = capture::Input::video(&config) {
-        workers.spawn(capture::monitor(input, store.clone(), health.clone(), active.1.clone()));
+        workers.spawn(capture::monitor(input, store.clone(), health.clone(), media.clone(), active.1.clone()));
     }
     if let Some(input) = capture::Input::audio(&config) {
-        workers.spawn(capture::monitor(input, store.clone(), health, active.1));
+        workers.spawn(capture::monitor(input, store.clone(), health, media, active.1));
     }
     workers.spawn(push::work(store, push, config.retention_days));
     tracing::info!(address = %listener.local_addr()?, "Surveillance host started");

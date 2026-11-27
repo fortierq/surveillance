@@ -152,6 +152,8 @@ class MonitorModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun mediaApi(): HostApi? = connection?.let(::HostApi)
+
     fun checkNotifications() {
         mutableState.update {
             it.copy(notificationsAllowed = notificationsAllowed(app), firebaseAvailable = firebaseAvailable(app))
@@ -278,6 +280,8 @@ class MonitorModel(private val app: Application) : AndroidViewModel(app) {
 private fun MonitorScreen(state: MonitorState, model: MonitorModel, enableNotifications: () -> Unit) {
     var origin by rememberSaveable { mutableStateOf("") }
     var code by remember { mutableStateOf("") }
+    var showLive by remember { mutableStateOf(false) }
+    val mediaApi = remember(state.origin) { model.mediaApi() }
     Scaffold { padding ->
         LazyColumn(
             modifier = Modifier.padding(padding).padding(horizontal = 20.dp),
@@ -326,6 +330,9 @@ private fun MonitorScreen(state: MonitorState, model: MonitorModel, enableNotifi
                                 Button(onClick = { model.arm(!status.armed) }, enabled = !state.busy) {
                                     Text(if (status.armed) "Disarm" else "Arm")
                                 }
+                                if (status.armed && status.liveVideo && status.camera != "disabled") {
+                                    TextButton(onClick = { showLive = true }) { Text("Live view") }
+                                }
                             }
                         }
                     }
@@ -360,18 +367,27 @@ private fun MonitorScreen(state: MonitorState, model: MonitorModel, enableNotifi
             }
         }
     }
+    if (showLive && mediaApi != null && state.detailId == null) {
+        LiveView(mediaApi, onClose = { showLive = false })
+    }
     if (state.origin != null && state.detailId != null) {
         AlertDialog(
             onDismissRequest = model::closeEvent,
             title = { Text(state.detail?.let { eventLabel(it.kind) } ?: "Event") },
             text = {
-                Text(
-                    state.detail?.let(::eventTime) ?: when {
-                        state.detailMissing -> "This event has expired."
-                        state.error != null -> state.error
-                        else -> "Loading event…"
-                    },
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(
+                        state.detail?.let(::eventTime) ?: when {
+                            state.detailMissing -> "This event has expired."
+                            state.error != null -> state.error
+                            else -> "Loading event…"
+                        },
+                    )
+                    val detail = state.detail
+                    if (detail != null && mediaApi != null) {
+                        EventMediaView(mediaApi, detail)
+                    }
+                }
             },
             confirmButton = { TextButton(onClick = model::closeEvent) { Text("Close") } },
         )
