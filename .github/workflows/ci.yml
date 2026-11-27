@@ -25,6 +25,11 @@ jobs:
       - name: Test the FFmpeg capture pipeline
         if: runner.os != 'Windows'
         run: nix develop --command cargo test --locked -p surveillance -- --ignored
+      - name: Build and verify the macOS app bundle
+        if: runner.os == 'macOS'
+        run: |
+          nix build
+          codesign --verify --deep --strict result/Applications/Surveillance.app
       - name: Install Rust on Windows
         if: runner.os == 'Windows'
         run: rustup toolchain install 1.95.0 --profile minimal --component clippy

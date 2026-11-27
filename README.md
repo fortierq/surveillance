@@ -22,7 +22,7 @@ The host shell and Nix package are available on macOS and Linux. Windows uses na
 ## Start the host and pair Android
 
 1. Run `./result/bin/surveillance init`. It creates a configuration file and prints its path. Run `./result/bin/surveillance devices` to list available capture inputs.
-2. On macOS, launch `open result/Applications/Surveillance.app`. On Linux, run `./result/bin/surveillance serve` in a terminal. The host listens on loopback port 8765. It writes operational messages to `host.log` alongside its configuration.
+2. On macOS, launch `open result/Applications/Surveillance.app`. On Linux, run `./result/bin/surveillance serve` in a terminal. The host listens on loopback port 8765. It writes operational messages to `host.log` alongside its configuration. To stop the macOS host, quit Surveillance in Activity Monitor.
 3. Set up [Tailscale Serve](https://tailscale.com/docs/features/tailscale-serve) on the host and connect the phone to the same private network. Publish the loopback listener with `tailscale serve --bg http://127.0.0.1:8765`. Use the resulting HTTPS address in the Android app.
 4. Install `android/app/build/outputs/apk/debug/app-debug.apk`. Run `./result/bin/surveillance pair` on the host and enter the HTTPS address and the one-time code in Android. The host supports one paired phone. To replace it, disconnect from the app or run `./result/bin/surveillance revoke` on the host.
 5. Tap **Arm** in Android. macOS may ask for camera and microphone access. Allow access on the host and check that both sensors show **Ready**. Tap **Disarm** to release the inputs.

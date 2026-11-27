@@ -59,16 +59,14 @@ impl Input {
     pub fn video(config: &Config) -> Option<Self> {
         config.camera_enabled.then_some(())?;
         let device = config.camera_device.clone().unwrap_or_else(|| {
-            if cfg!(target_os = "linux") { "/dev/video0".into() } else { "0".into() }
+            if cfg!(target_os = "linux") { "/dev/video0".into() } else { "default".into() }
         });
         Some(Self { sensor: Sensor::Camera, device, detection: Detection::Motion(config.region()?, config.motion_threshold) })
     }
 
     pub fn audio(config: &Config) -> Option<Self> {
         config.microphone_enabled.then_some(())?;
-        let device = config.microphone_device.clone().unwrap_or_else(|| {
-            if cfg!(target_os = "linux") { "default".into() } else { "0".into() }
-        });
+        let device = config.microphone_device.clone().unwrap_or_else(|| "default".into());
         Some(Self { sensor: Sensor::Microphone, device, detection: Detection::Sound(config.sound_margin_db) })
     }
 

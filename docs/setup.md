@@ -6,7 +6,7 @@ Run `surveillance init` to find the configuration file. Restart the host after e
 
 | OS | Camera input | Microphone input |
 | --- | --- | --- |
-| macOS | AVFoundation camera index, default `0` | AVFoundation audio index, default `0` |
+| macOS | System default camera or AVFoundation camera index | System default microphone or AVFoundation audio index |
 | Linux | V4L2 device path, default `/dev/video0` | PulseAudio source, default `default`. PipeWire systems can use their PulseAudio-compatible server. |
 | Windows | DirectShow video device name | DirectShow audio device name |
 

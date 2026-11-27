@@ -44,15 +44,16 @@
             version = "0.1.0";
             src = ./.;
             cargoLock.lockFile = ./Cargo.lock;
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            postInstall = if pkgs.stdenv.hostPlatform.isDarwin then ''
+            nativeBuildInputs = nixpkgs.lib.optionals pkgs.stdenv.hostPlatform.isDarwin [ pkgs.rcodesign ];
+            postInstall = nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
               app="$out/Applications/Surveillance.app/Contents"
               mkdir -p "$app/MacOS"
               cp packaging/Info.plist "$app/Info.plist"
               mv "$out/bin/surveillance" "$app/MacOS/surveillance"
               ln -s "$app/MacOS/surveillance" "$out/bin/surveillance"
-            '' else ''
-              wrapProgram "$out/bin/surveillance" --set-default SURVEILLANCE_FFMPEG "${pkgs.ffmpeg}/bin/ffmpeg"
+            '';
+            postFixup = nixpkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              rcodesign sign "$out/Applications/Surveillance.app"
             '';
             SURVEILLANCE_BUILD_FFMPEG = "${pkgs.ffmpeg}/bin/ffmpeg";
           };
