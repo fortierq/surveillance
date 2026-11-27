@@ -16,6 +16,14 @@ Set `camera_device` and `microphone_device` to the desired inputs from `surveill
 
 The API binds to loopback. Use a private Tailscale Serve endpoint with access scoped to your own devices. A paired phone can send arm/disarm commands with its device credential, which Android stores using Android Keystore. Disconnecting a phone revokes its access. Monitoring continues in the host's current armed state.
 
+## Start at macOS login
+
+Run `./packaging/install-macos-startup.sh` from the repository. It builds the signed app into a Nix store link in Surveillance's application data directory and registers a user LaunchAgent. The agent opens Surveillance at login and also starts Tailscale if the app is installed in Applications and its process is absent. Configure Tailscale and Serve once as described in the [README](../README.md). The macOS session must be open for this login agent to run.
+
+Surveillance starts disarmed after every host launch. Use **Arm** in Android to start the camera and microphone. Closing the app on the phone or locking the phone leaves an already armed host running.
+
+To turn off automatic startup, unload the agent with `launchctl bootout "gui/$(id -u)/org.surveillance.host.startup"` and remove `~/Library/LaunchAgents/org.surveillance.host.startup.plist`. You can still launch the host manually.
+
 ## Configure Firebase alerts
 
 1. In your Firebase project, add an Android application with package name `org.surveillance.app`. Download `google-services.json` to `android/app/google-services.json`. Build and install the APK again from the Nix Android shell.

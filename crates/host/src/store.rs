@@ -86,6 +86,11 @@ impl Store {
         Ok(self.connection()?.query_row("SELECT armed FROM state WHERE slot = 1", [], |row| row.get(0))?)
     }
 
+    pub fn disarm_on_start(&self) -> Result<()> {
+        self.connection()?.execute("UPDATE state SET armed = 0 WHERE slot = 1 AND armed = 1", [])?;
+        Ok(())
+    }
+
     pub fn issue_code(&self) -> Result<String> {
         let mut conn = self.connection()?;
         let tx = conn.transaction_with_behavior(Immediate)?;
@@ -269,6 +274,19 @@ pub fn now() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn startup_disarms_the_host_and_keeps_the_phone_paired() {
+        let store = Store::open(Path::new(":memory:")).unwrap();
+        let credential = store.pair(&store.issue_code().unwrap()).unwrap().unwrap();
+        assert!(store.set_armed(&credential, true).unwrap());
+
+        store.disarm_on_start().unwrap();
+
+        assert!(!store.armed().unwrap());
+        assert!(store.authorized(&credential).unwrap());
+        assert!(store.record(Kind::Motion, 0.2, true, EventMedia::default()).unwrap().is_none());
+    }
 
     #[test]
     fn expired_alert_is_removed_while_event_remains() {

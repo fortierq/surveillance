@@ -84,7 +84,8 @@ async fn serve(store: Arc<Store>, config: Config, data: PathBuf) -> Result<()> {
     tracing_subscriber::fmt().with_ansi(false).with_writer(std::sync::Mutex::new(logfile)).init();
     let push = config.firebase_credentials_file.as_deref().map(push::Fcm::load).transpose()?;
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
-    let active = watch::channel(store.armed()?);
+    store.disarm_on_start()?;
+    let active = watch::channel(false);
     let health = Arc::new(capture::Health::default());
     let media = Arc::new(media::Media::default());
     let state = api::State { store: store.clone(), health: health.clone(), media: media.clone(), armed: Arc::new(active.0), push_configured: push.is_some() };

@@ -2,7 +2,7 @@
 
 A Rust desktop host detects movement and loud sounds from a camera and microphone. The Android app pairs with the host, shows live video, sensor status, and event history, lets you arm or disarm detection, and receives alerts through Firebase Cloud Messaging (FCM).
 
-Detection uses frame differencing and audio levels. The host keeps a recent camera frame and a short rolling audio buffer in memory. A detection event saves a JPEG photo and up to three seconds of audio ending at the trigger when those sensors are available. The host stores the media and event history in SQLite. The default retention period is seven days, and the host keeps media for up to 1,000 events. The host starts disarmed on a fresh install and remembers its armed state across restarts.
+Detection uses frame differencing and audio levels. The host keeps a recent camera frame and a short rolling audio buffer in memory. A detection event saves a JPEG photo and up to three seconds of audio ending at the trigger when those sensors are available. The host stores the media and event history in SQLite. The default retention period is seven days, and the host keeps media for up to 1,000 events. The host starts disarmed every time it launches. Tap **Arm** on the paired phone to activate detection.
 
 ## Build with Nix
 
@@ -28,6 +28,8 @@ The host shell and Nix package are available on macOS and Linux. Windows uses na
 5. Tap **Arm** in Android. macOS may ask for camera and microphone access. Allow access on the host and check that both sensors show **Ready**. Tap **Disarm** to release the inputs.
 
 While armed, tap **Live view** to see the camera. Open a detection event to see its photo or tap **Play audio** to hear the clip. The camera preview and new event photos use compressed 320 × 240 JPEG images. The phone fetches media over private HTTPS.
+
+On macOS, run `./packaging/install-macos-startup.sh` to start Surveillance when you sign in. If Tailscale is installed in Applications, the same login agent starts it as needed. Re-run the installer to update the startup package. See [macOS login setup](docs/setup.md#start-at-macos-login).
 
 The host needs to be running and awake. For Android alerts while the phone is locked or away from Wi-Fi, [configure Firebase and run the device checks](docs/setup.md#configure-firebase-alerts). Pairing, status, and event history also work with the build that omits Firebase configuration.
 
