@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key><string>org.surveillance.host</string>
+    <key>CFBundleExecutable</key><string>surveillance</string>
+    <key>CFBundleName</key><string>Surveillance</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleVersion</key><string>1</string>
+    <key>LSUIElement</key><true/>
+    <key>NSCameraUsageDescription</key><string>Surveillance uses your camera to detect movement when armed.</string>
+    <key>NSMicrophoneUsageDescription</key><string>Surveillance uses your microphone to detect loud sounds when armed.</string>
+</dict>
+</plist>

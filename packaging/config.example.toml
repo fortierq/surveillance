@@ -1,0 +1,16 @@
+listen = "127.0.0.1:8765"
+camera_enabled = true
+microphone_enabled = true
+
+# Run surveillance devices to discover inputs. Use FFmpeg device names on Windows.
+# camera_device = "0"
+# microphone_device = "0"
+
+# Left, top, right, bottom in the 160 x 120 detection raster.
+motion_region = [0, 0, 160, 120]
+motion_threshold = 0.04
+sound_margin_db = 14.0
+retention_days = 7
+
+# Use an absolute path outside this repository.
+# firebase_credentials_file = "/path/to/firebase-service-account.json"

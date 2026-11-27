@@ -1,0 +1,5 @@
+[package]
+name = "surveillance-detect"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true

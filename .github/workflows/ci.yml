@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+        if: runner.os != 'Windows'
+      - name: Test and lint with Nix
+        if: runner.os != 'Windows'
+        run: nix develop --command sh -ec 'cargo test --locked --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings'
+      - name: Test the FFmpeg capture pipeline
+        if: runner.os != 'Windows'
+        run: nix develop --command cargo test --locked -p surveillance -- --ignored
+      - name: Install Rust on Windows
+        if: runner.os == 'Windows'
+        run: rustup toolchain install 1.95.0 --profile minimal --component clippy
+      - name: Test and lint on Windows
+        if: runner.os == 'Windows'
+        run: |
+          cargo +1.95.0 test --locked --workspace
+          cargo +1.95.0 clippy --locked --workspace --all-targets -- -D warnings
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: cachix/install-nix-action@v31
+      - uses: gradle/actions/wrapper-validation@v4
+      - name: Test, lint, and build Android with Nix
+        run: nix develop .#android --command ./android/gradlew -p android --no-daemon testDebugUnitTest lintDebug assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: surveillance-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk

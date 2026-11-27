@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Surveillance</string>
+    <string name="notification_channel_id" translatable="false">surveillance_alerts</string>
+    <string name="notification_channel_name">Surveillance alerts</string>
+    <string name="notification_title">Surveillance alert</string>
+    <string name="notification_body">Open the app to see the event.</string>
+</resources>

@@ -1,0 +1,32 @@
+[package]
+name = "surveillance"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+axum = "0.8"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+directories = "6"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+surveillance-detect = { path = "../detect" }
+tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = "0.6"
+objc2-av-foundation = { version = "0.3", default-features = false, features = ["AVCaptureDevice", "AVMediaFormat", "block2"] }

@@ -1,0 +1,12 @@
+/target/
+/result
+/result-*
+/android/.gradle/
+/android/**/build/
+/android/local.properties
+/android/app/google-services.json
+/.env
+*.sqlite3*
+*.jks
+*.keystore
+/service-account*.json
